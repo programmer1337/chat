@@ -1,0 +1,102 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               Int           @id @default(autoincrement())
+  login            String        @unique
+  passwordHash     String
+  registrationDate DateTime      @default(now())
+  friendTag        Int           @unique
+  accountStatus    AccountStatus @default(Activated)
+  chats            UserInChat[]
+  messages         Message[]
+  friends          Friend[]      @relation("friends")
+  friendOf         Friend[]      @relation("friendOf")
+  userProfile      UserProfile?
+}
+
+model UserProfile {
+  user       User   @relation(fields: [userId], references: [id])
+  userId     Int    @unique
+  firstName  String
+  lastName   String
+  userName   String
+  userAvatar String @default("https://avatars.mds.yandex.net/i?id=7ed09bb7a0d83a61b5ff96ab06195c8b3bc46c09-7547952-images-thumbs&n=13")
+
+  @@id([userId])
+}
+
+model Chat {
+  id           Int          @id @default(autoincrement())
+  chatName     String
+  creationDate DateTime     @default(now())
+  chatType     String
+  users        UserInChat[]
+  messages     Message[]
+}
+
+model UserInChat {
+  user          User           @relation(fields: [userId], references: [id])
+  userId        Int
+  chat          Chat           @relation(fields: [chatId], references: [id])
+  chatId        Int
+  chatAlias     String
+  statusUpdated DateTime       @default(now())
+  userStatus    UserChatStatus @default(InChat)
+
+  @@id([userId, chatId])
+}
+
+model Message {
+  user           User          @relation(fields: [userId], references: [id])
+  userId         Int
+  chat           Chat          @relation(fields: [chatId], references: [id])
+  chatId         Int
+  messageContent String
+  postDate       DateTime      @default(now())
+  status         MessageStatus @default(Sent)
+
+  @@id([userId, chatId, postDate])
+}
+
+model Friend {
+  id          Int          @id @default(autoincrement())
+  user        User         @relation(name: "friendOf", fields: [userIdFK], references: [id])
+  userIdFK    Int
+  friend      User         @relation(name: "friends", fields: [friendIdFK], references: [id])
+  friendIdFK  Int
+  status      FriendStatus @default(NotFriends)
+  friendAlias String
+}
+
+enum AccountStatus {
+  Activated
+  Deactivated
+}
+
+enum UserChatStatus {
+  InChat
+  LeaveChat
+  ClearedChat
+}
+
+enum MessageStatus {
+  Sent
+  Delivered
+  Received
+}
+
+enum FriendStatus {
+  Pending
+  NotFriends
+  Friends
+}

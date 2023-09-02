@@ -1,0 +1,13 @@
+../node_modules
+# Keep environment variables out of version control
+/backend/.env
+
+# dependencies
+node_modules/
+
+#IDEA
+.idea
+
+#
+/store/
+
