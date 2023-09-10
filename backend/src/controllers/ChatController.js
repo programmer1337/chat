@@ -1,91 +1,36 @@
-import {PrismaClient, UserChatStatus} from "@prisma/client";
+import {PrismaClient} from "@prisma/client";
+import ChatService from "../service/ChatService.js";
+import UserService from "../service/UserService.js";
 
 const prisma = new PrismaClient();
-
-const createChat = async (chatName, chatType) => {
-    return prisma.chat.create({
-        data: {
-            chatName: chatName,
-            creationDate: new Date(),
-            chatType: chatType,
-        },
-    })
-}
-const addUsersInChat = async (chatId, firstUser, secondUser) => {
-    const firstUserName = firstUser.userProfile.firstName + " " + firstUser.userProfile.lastName
-    const secondUserName = secondUser.userProfile.firstName + " " + secondUser.userProfile.lastName
-
-    return prisma.userInChat.createMany({
-        data: [
-            {
-                userId: firstUser.id,
-                chatId: chatId,
-                chatAlias: secondUserName,
-                userStatus: "InChat",
-            },
-            {
-                userId: secondUser.id,
-                chatId: chatId,
-                chatAlias: firstUserName,
-                userStatus: "InChat",
-            }
-        ]
-    })
-}
+const chatService = new ChatService(prisma);
+const userService = new UserService(prisma);
 export const createChatDialogue = async (req, res) => {
     try {
+        const {userId} = req.userId;
         const {friendTag} = req.body;
 
-        const firstUser = await prisma.user.findUnique({
-            where: {
-                id: req.userId
-            },
-            include: {
-                userProfile: true,
-            }
-        });
-        const secondUser = await prisma.user.findUnique({
-            where: {
-                friendTag: friendTag
-            },
-            include: {
-                userProfile: true,
-            }
-        });
+        const firstUser = await userService.getUserProfileById(userId);
+        const secondUser = await userService.getUserProfileByFriendTag(friendTag);
 
-        const chatBetweenTwoUsers = await prisma.chat.findMany({
-            where: {
-                users: {
-                    every: {
-                        userId: {in: [req.userId, secondUser.id]},
-                    }
-                }
-            },
-        });
-        const isChatCreated = chatBetweenTwoUsers.length > 0;
+        const chatBetweenTwoUsers = await
+            chatService.findDialogueBetween(firstUser.id, secondUser.id);
 
-        if (isChatCreated) {
+        if (chatBetweenTwoUsers.length > 0) {
+            await chatService.updateUserInChat(firstUser, chatBetweenTwoUsers.id)
+
             return res.json({
                 success: false,
                 message: "Чат уже создан",
             })
         }
 
-        await prisma.userInChat.updateMany({
-            where: {
-                AND: {
-                    userId: req.userId,
-                    chatId: chatBetweenTwoUsers.chatId,
-                }
-            },
-            data: {
-                statusUpdated: new Date(),
-                userStatus: "InChat",
-            }
-        })
+        const chat =
+            await chatService.createChat("DefaultChatName", "Dialogue")
 
-        const chat = await createChat("DefaultChatName", "Dialogue")
-        const usersInChat = await addUsersInChat(chat.id, firstUser, secondUser)
+        const usersInChat =
+            await chatService.addUsersInChat(chat.id, firstUser, secondUser);
+
         res.json({
             success: true,
             message: "Чат создан",
@@ -95,77 +40,30 @@ export const createChatDialogue = async (req, res) => {
         })
     } catch
         (error) {
-        res.status(400).json(error)
+        res.status(400)
+            .json({
+                success: false,
+                message: error.message,
+            })
     }
 }
 export const getChats = async (req, res) => {
     try {
-        const chats = await prisma.chat.findMany({
-            skip: parseInt(req.params.start),
-            take: parseInt(req.params.count),
-            where: {
-                users: {
-                    some: {
-                        userId: req.userId
-                    }
-                },
-            },
-            include: {
-                users: {
-                    select: {
-                        chatAlias: true,
-                        statusUpdated: true,
-                        user: {
-                            select: {
-                                userProfile: {
-                                    where: {
-                                        NOT: {
-                                            userId: req.userId
-                                        }
-                                    },
-                                },
-                            }
-                        },
-                    }
-                },
-                messages: {
-                    orderBy: {
-                        postDate: 'desc',
-                    },
-                    take: 1,
-                },
-                _count: {
-                    select: {messages: true},
-                },
-            },
-        });
+        const userId = req.userId;
+        const start = parseInt(req.params.start);
+        const count = parseInt(req.params.count);
 
-        const newChats = chats.map((chat) => (
-            {
-                id: chat.id,
-                creationDate: chat.creationDate,
-                chatType: chat.chatType,
-                chatAlias: chat.users[1].user.userProfile === null ? chat.users[1].chatAlias : chat.users[0].chatAlias,
-                messagesCount: chat._count.messages,
-                userCompanion: chat.users[1].user.userProfile !== null ? chat.users[1].user.userProfile : chat.users[0].user.userProfile,
-                statusUpdated: chat.users[1].user.userProfile === null  ? chat.users[1].statusUpdated : chat.users[0].statusUpdated,
-                lastMessage: chat.messages.length === 0 ? "No messages" : {
-                    lastMessageBy: chat.messages[0].userId === req.userId ? "you" : "companion",
-                    messageContent: chat.messages[0].messageContent,
-                    postDate: chat.messages[0].postDate,
-                }
-            }
-        ));
+        const chats = await chatService.getChats(userId, start, count);
+
         res.json({
             success: true,
-            userChats: newChats,
+            userChats: chats,
         })
     } catch
         (error) {
         res.status(400).json(error)
     }
 }
-
 
 //TODO updateChat
 export const updateChat = async (req, res) => {
@@ -191,21 +89,15 @@ export const updateChat = async (req, res) => {
 }
 export const deleteChatFromUser = async (req, res) => {
     try {
-        const chat = await prisma.userInChat.updateMany({
-            where: {
-                userId: req.userId,
-                chatId: parseInt(req.params.id),
-            },
-            data: {
-                statusUpdated: new Date(),
-                userStatus: UserChatStatus.ClearedChat,
-            },
-        })
+        const userId = req.userId;
+        const chatId = parseInt(req.params.id);
+
+        const chat = await chatService.deleteChatFromUser(userId, chatId);
 
         res.json({
-            chat,
-            chatId: req.params.id,
             success: true,
+            chatId: chatId,
+            chat,
         })
     } catch
         (error) {

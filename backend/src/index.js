@@ -21,7 +21,6 @@ const io = new Server(server, {
 })
 
 const activeChat = []
-
 io.on('connection', (socket)=>{
     socket.on('createChat', ({chatId})=>{
         socket.join(chatId);

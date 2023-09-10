@@ -1,173 +1,81 @@
 import {PrismaClient} from '@prisma/client'
 import {validationResult} from "express-validator";
-import bcrypt from "bcrypt";
-import jsonwebtoken from "jsonwebtoken";
 import {checkRegisterData} from "../validations/registrationDataValidation.js";
+import UserService from "../service/UserService.js";
 
 const prisma = new PrismaClient();
-const prepareUserData = async (firstName, lastName, login, password, userAvatar) => {
-    const usersCount = await prisma.user.count();
-
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    return {
-        firstName: firstName,
-        lastName: lastName,
-        userName: login,
-        login: login,
-        passwordHash: passwordHash,
-        usersCount: usersCount,
-        userAvatar: userAvatar,
-    }
-}
-const createUser = async (userData) => {
-    let data;
-    if (userData.userAvatar === "") {
-        data = {
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            userName: userData.userName,
-        }
-    } else {
-        data = {
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            userName: userData.userName,
-            userAvatar: userData.userAvatar,
-        }
-    }
-
-    return prisma.user.create({
-        data: {
-            login: userData.login,
-            passwordHash: userData.passwordHash,
-            registrationDate: new Date(),
-            friendTag: 1000000 + userData.usersCount,
-            userProfile: {
-                create: data,
-            }
-        },
-    })
-}
+const userService = new UserService(prisma);
 
 export const register = async (req, res) => {
-    try {
-        const validResult = validationResult(req);
-        console.log(validResult.array())
-        if (!validResult.isEmpty()) {
-            let errors = validResult.array();
+  try {
+    const validResult = validationResult(req);
 
-            return res.status(400).json(checkRegisterData(errors))
-        }
-
-        const {firstName, lastName, login, password, userAvatar} = req.body;
-
-        const user = await createUser(
-            await prepareUserData(firstName, lastName, login, password, userAvatar)
-        )
-
-        const token = jsonwebtoken.sign({
-                _id: user.id
-            }, "aviceSecretKey",
-            {
-                expiresIn: "30d",
-            })
-
-        res.json({
-            user: user,
-            token
-        });
-    } catch (error) {
-        let errorData = {
-            errorType: "DefaultError",
-            error: error,
-        };
-
-        if (error.name === "PrismaClientKnownRequestError") {
-            if (error.meta.target[0] === "login") {
-                errorData = {
-                    errorType: "DatabaseError",
-                    errorMessage: "Login уже используется"
-                }
-            }
-
-        }
-
-        res.json(errorData);
+    if (!validResult.isEmpty()) {
+      let errors = validResult.array();
+      return res.status(400).json(checkRegisterData(errors))
     }
+
+    const userData = req.body;
+
+    const user = await userService.createUser(userData);
+    const token = await userService.generateJWT(user);
+
+    res.json({
+      user: user,
+      token
+    });
+  } catch (error) {
+    let errorData = {
+      errorType: "DefaultError",
+      error: error,
+    };
+
+    if (error.name === "PrismaClientKnownRequestError") {
+      if (error.meta.target[0] === "login") {
+        errorData = {
+          errorType: "DatabaseError",
+          errorMessage: "Login уже используется"
+        }
+      }
+    }
+
+    res
+      .status(400)
+      .json(errorData);
+  }
 }
 export const login = async (req, res) => {
-    try {
-        const {login, password} = req.body
-        const user = await prisma.user.findUnique({
-            where: {
-                login: login
-            }
-        })
+  try {
+    const {login, password} = req.body
+    const user = await userService.getUser(login);
+    const token = await userService.authorizeUser(user, password);
 
-        if (!user) {
-            return res.status(404).json({
-                message: "Неверный логин",
-            })
-        }
-
-        const isValidPass = await bcrypt.compare(password, user.passwordHash);
-        if (!isValidPass) {
-            return res.status(400).json({
-                message: "Не получается войти(( Неверный логин или пароль",
-            })
-        }
-
-        const token = jsonwebtoken.sign({
-                _id: user.id,
-            }, "aviceSecretKey",
-            {
-                expiresIn: "30d",
-            }
-        )
-
-        res.json({
-            ...user,
-            token,
-        });
-    } catch (error) {
-        res.json(error)
-    }
+    res.json({
+      ...user,
+      token,
+    });
+  } catch (error) {
+    res.status(400).json({
+      errorType: "LoginError",
+      message: error.message
+    })
+  }
 }
 export const getProfileInfo = async (req, res) => {
-    try {
-        const userId = req.userId;
-        const user = await prisma.user.findUnique({
-            where: {
-                id: userId
-            },
-            include: {
-                userProfile: true,
-            }
-        });
+  try {
+    const userId = req.userId;
+    const userProfile = await userService.getUserProfileById(userId);
 
-        if (!user) {
-            res.status(404).json({
-                message: "Пользователь не найден"
-            })
-        }
-
-        const userData = {
-            userId: user.id,
-            firstName: user.userProfile.firstName,
-            lastName: user.userProfile.lastName,
-            userName: user.userProfile.userName,
-            userAvatar: user.userProfile.userAvatar,
-            userFriendTag: user.friendTag,
-        }
-
-        res.json({
-            userProfile: userData,
-        });
-    } catch (error) {
-        res.status(500).json(error);
-    }
+    res.json({
+      userProfile: userProfile,
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({
+        message: error.message,
+      });
+  }
 }
 
 //TODO updateUserProfile
